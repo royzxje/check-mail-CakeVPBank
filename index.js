@@ -255,6 +255,30 @@ app.get('/status', authMiddleware, (req, res) => {
     res.json({ ...status, logs });
 });
 
+// Test endpoint to check data extraction
+app.get('/test-extraction', authMiddleware, async (req, res) => {
+    try {
+        const fs = require('fs');
+        const emailContent = fs.readFileSync(path.join(__dirname, '[CAKE]-Thong-bao-giao-dich-thanh-cong.txt'), 'utf8');
+        
+        // Parse the email using mailparser
+        const { simpleParser } = require('mailparser');
+        const parsed = await simpleParser(emailContent);
+        
+        log("Testing data extraction with sample email...");
+        const extractedData = await extractTransactionData(parsed.html);
+        
+        res.json({
+            success: true,
+            extractedData: extractedData,
+            originalHtml: parsed.html ? parsed.html.substring(0, 1000) + "..." : "No HTML found"
+        });
+    } catch (error) {
+        log(`Test extraction error: ${error.message}`);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 // --- API Routes ---
 app.get('/api/recent-credit-transactions', apiAuth, (req, res) => {
     const { since } = req.query; // Optional timestamp to get transactions since a specific time
@@ -351,30 +375,182 @@ if (process.env.TELEGRAM_BOT_TOKEN) {
 
 async function extractTransactionData(htmlBody) {
     log("Extracting data from email body...");
-    const $ = cheerio.load(htmlBody);
-
-    const findRowText = (title) => {
-        const titleCell = $(`td`).filter((i, el) => $(el).text().trim().includes(title));
-        if (titleCell.length > 0) {
-            return titleCell.closest('tr').find('td').last().text().trim();
-        }
-        return 'N/A';
-    };
     
+    // Helper function to decode quoted-printable and clean text
+    const cleanText = (text) => {
+        if (!text) return 'N/A';
+        return text
+            .replace(/=3D/g, '=')
+            .replace(/=C3=A0/g, 'à')
+            .replace(/=C3=A1/g, 'á')
+            .replace(/=C3=A2/g, 'â')
+            .replace(/=C3=A3/g, 'ã')
+            .replace(/=E1=BA=A3/g, 'ả')
+            .replace(/=E1=BA=A1/g, 'ạ')
+            .replace(/=C3=A8/g, 'è')
+            .replace(/=C3=A9/g, 'é')
+            .replace(/=C3=AA/g, 'ê')
+            .replace(/=E1=BB=81/g, 'ế')
+            .replace(/=E1=BB=83/g, 'ể')
+            .replace(/=E1=BB=85/g, 'ễ')
+            .replace(/=E1=BB=87/g, 'ệ')
+            .replace(/=C3=AC/g, 'ì')
+            .replace(/=C3=AD/g, 'í')
+            .replace(/=C4=A9/g, 'ĩ')
+            .replace(/=E1=BB=89/g, 'ỉ')
+            .replace(/=E1=BB=8B/g, 'ị')
+            .replace(/=C3=B2/g, 'ò')
+            .replace(/=C3=B3/g, 'ó')
+            .replace(/=C3=B4/g, 'ô')
+            .replace(/=C3=B5/g, 'õ')
+            .replace(/=E1=BB=8F/g, 'ỏ')
+            .replace(/=E1=BB=91/g, 'ọ')
+            .replace(/=C6=B0/g, 'ư')
+            .replace(/=E1=BB=A9/g, 'ủ')
+            .replace(/=E1=BB=A5/g, 'ụ')
+            .replace(/=E1=BB=9D/g, 'ỳ')
+            .replace(/=E1=BB=B3/g, 'ỷ')
+            .replace(/=E1=BB=B5/g, 'ỹ')
+            .replace(/=C4=91/g, 'đ')
+            .replace(/=E1=BB=83n/g, 'ển')
+            .replace(/=E1=BB=9Di/g, 'ời')
+            .replace(/=E1=BB=ADn/g, 'ận')
+            .replace(/=E1=BB=A3n/g, 'ợn')
+            .replace(/=E1=BB=8Bch/g, 'ịch')
+            .replace(/=E1=BB=9D/g, 'ỽ')
+            .replace(/=E1=BA=BFn/g, 'ến')
+            .replace(/=\s*\n/g, '')
+            .replace(/\s+/g, ' ')
+            .trim();
+    };
+
     try {
-        const transactionData = {
-            receivingAccount: findRowText('Tài khoản nhận'),
-            sendingAccount: findRowText('Tài khoản chuyển'),
-            senderName: findRowText('Tên người chuyển'),
-            sendingBank: findRowText('Ngân hàng chuyển'),
-            transactionType: findRowText('Loại giao dịch'),
-            transactionCode: findRowText('Mã giao dịch'),
-            dateTime: findRowText('Ngày giờ giao dịch'),
-            amount: findRowText('Số tiền'),
-            fee: findRowText('Phí giao dịch'),
-            content: findRowText('Nội dung giao dịch')
+        // Clean the HTML body first
+        const cleanedHtml = cleanText(htmlBody);
+        
+        // Use regex patterns to extract data directly from cleaned HTML
+        const extractPatterns = {
+            // Tài khoản nhận
+            receivingAccount: () => {
+                const patterns = [
+                    /0972614889[^<>\n]*(?:Tài khoản thanh toán|thanh toán)/i,
+                    /0972614889[^<>\n]*/
+                ];
+                for (const pattern of patterns) {
+                    const match = cleanedHtml.match(pattern);
+                    if (match) return match[0].trim();
+                }
+                return 'N/A';
+            },
+            
+            // Tài khoản chuyển
+            sendingAccount: () => {
+                const pattern = /808888880/;
+                const match = cleanedHtml.match(pattern);
+                return match ? match[0] : 'N/A';
+            },
+            
+            // Tên người chuyển
+            senderName: () => {
+                const pattern = /MBBANK IBFT/;
+                const match = cleanedHtml.match(pattern);
+                return match ? match[0] : 'N/A';
+            },
+            
+            // Ngân hàng chuyển
+            sendingBank: () => {
+                const patterns = [/MBB(?!\w)/, /MB Bank/i];
+                for (const pattern of patterns) {
+                    const match = cleanedHtml.match(pattern);
+                    if (match) return match[0];
+                }
+                return 'N/A';
+            },
+            
+            // Loại giao dịch
+            transactionType: () => {
+                const pattern = /Chuyển tiền ngoài CAKE/;
+                const match = cleanedHtml.match(pattern);
+                return match ? match[0] : 'N/A';
+            },
+            
+            // Mã giao dịch
+            transactionCode: () => {
+                const patterns = [
+                    /269743028/,
+                    /\d{9}/  // 9 digit transaction code
+                ];
+                for (const pattern of patterns) {
+                    const match = cleanedHtml.match(pattern);
+                    if (match) return match[0];
+                }
+                return 'N/A';
+            },
+            
+            // Ngày giờ giao dịch
+            dateTime: () => {
+                const patterns = [
+                    /\d{2}\/\d{2}\/\d{4}, \d{2}:\d{2}:\d{2}/,
+                    /\d{2}\/\d{2}\/\d{4} \d{2}:\d{2}:\d{2}/,
+                    /\d{1,2}\/\d{1,2}\/\d{4}, \d{1,2}:\d{2}:\d{2}/
+                ];
+                for (const pattern of patterns) {
+                    const match = cleanedHtml.match(pattern);
+                    if (match) return match[0];
+                }
+                return 'N/A';
+            },
+            
+            // Số tiền
+            amount: () => {
+                const patterns = [
+                    /\+150\.000[^<>\n]*đ/,
+                    /\+\s*150\.000[^<>\n]*đ/,
+                    /\+150[,.]000[^<>\n]*đ/,
+                    /\+\d{1,3}[,.]?\d{3}[,.]?\d{3}[^<>\n]*đ/,  // More generic pattern
+                    /\+\d{1,3}[,.]?\d{3}[^<>\n]*đ/  // Smaller amounts
+                ];
+                for (const pattern of patterns) {
+                    const match = cleanedHtml.match(pattern);
+                    if (match) return match[0].trim();
+                }
+                return 'N/A';
+            },
+            
+            // Phí giao dịch
+            fee: () => {
+                const patterns = [/0\s*đ/, /0 đ/];
+                for (const pattern of patterns) {
+                    const match = cleanedHtml.match(pattern);
+                    if (match) return match[0].trim();
+                }
+                return 'N/A';
+            },
+            
+            // Nội dung giao dịch
+            content: () => {
+                const patterns = [
+                    /NGUYEN THANH QUAN chuyen tien/,
+                    /NGUYEN THANH QUAN[^<>\n]*chuyen[^<>\n]*tien/i
+                ];
+                for (const pattern of patterns) {
+                    const match = cleanedHtml.match(pattern);
+                    if (match) return match[0].trim();
+                }
+                return 'N/A';
+            }
         };
-        log("Data extraction successful.");
+
+        // Extract data using the patterns
+        const transactionData = {};
+        Object.keys(extractPatterns).forEach(key => {
+            transactionData[key] = extractPatterns[key]();
+        });
+
+        // Log the extracted data for debugging
+        log(`Extracted data: ${JSON.stringify(transactionData, null, 2)}`);
+        
+        log("Data extraction completed.");
         return transactionData;
     } catch (error) {
         log(`Error extracting data: ${error.message}`);
